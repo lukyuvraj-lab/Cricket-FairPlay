@@ -1,12 +1,13 @@
 import streamlit as st
 import cv2
-import numpy as np
-from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
 import av
+
+from ultralytics import YOLO
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
 
 
 # ==========================================
-# PAGE CONFIGURATION
+# PAGE CONFIG
 # ==========================================
 
 st.set_page_config(
@@ -17,152 +18,85 @@ st.set_page_config(
 
 
 # ==========================================
-# VIDEO PROCESSOR
+# LOAD TRAINED YOLO MODEL
+# ==========================================
+
+MODEL_PATH = "models/cricket_ball.pt"
+
+model = YOLO(MODEL_PATH)
+
+
+# ==========================================
+# LIVE VIDEO PROCESSOR
 # ==========================================
 
 class CricketVideoProcessor(VideoProcessorBase):
-
-    def __init__(self):
-        self.ball_detected = False
-        self.ball_x = 0
-        self.ball_y = 0
-        self.ball_radius = 0
 
     def recv(self, frame):
 
         image = frame.to_ndarray(format="bgr24")
 
         # ----------------------------------
-        # TEMPORARY BALL DETECTION
+        # YOLO BALL DETECTION
         # ----------------------------------
-        # This is NOT the final AI detector.
-        # We will replace this with a trained
-        # cricket-ball model in V3.
 
-        hsv = cv2.cvtColor(
+        results = model.predict(
             image,
-            cv2.COLOR_BGR2HSV
+            conf=0.40,
+            imgsz=640,
+            verbose=False
         )
 
-        lower = np.array([0, 0, 120])
-        upper = np.array([180, 100, 255])
+        # ----------------------------------
+        # DRAW DETECTIONS
+        # ----------------------------------
 
-        mask = cv2.inRange(
-            hsv,
-            lower,
-            upper
-        )
+        for result in results:
 
-        kernel = np.ones(
-            (5, 5),
-            np.uint8
-        )
+            boxes = result.boxes
 
-        mask = cv2.morphologyEx(
-            mask,
-            cv2.MORPH_OPEN,
-            kernel
-        )
+            for box in boxes:
 
-        mask = cv2.morphologyEx(
-            mask,
-            cv2.MORPH_CLOSE,
-            kernel
-        )
+                confidence = float(box.conf[0])
 
-        contours, _ = cv2.findContours(
-            mask,
-            cv2.RETR_EXTERNAL,
-            cv2.CHAIN_APPROX_SIMPLE
-        )
-
-        best_circle = None
-        best_score = 0
-
-        for contour in contours:
-
-            area = cv2.contourArea(contour)
-
-            if area < 30 or area > 5000:
-                continue
-
-            perimeter = cv2.arcLength(
-                contour,
-                True
-            )
-
-            if perimeter == 0:
-                continue
-
-            circularity = (
-                4 * np.pi * area
-                / (perimeter * perimeter)
-            )
-
-            if circularity < 0.45:
-                continue
-
-            (x, y), radius = cv2.minEnclosingCircle(
-                contour
-            )
-
-            if radius < 3 or radius > 50:
-                continue
-
-            score = circularity * area
-
-            if score > best_score:
-
-                best_score = score
-
-                best_circle = (
-                    int(x),
-                    int(y),
-                    int(radius)
+                x1, y1, x2, y2 = map(
+                    int,
+                    box.xyxy[0]
                 )
 
-        # ----------------------------------
-        # DRAW DETECTION
-        # ----------------------------------
+                # Draw box
+                cv2.rectangle(
+                    image,
+                    (x1, y1),
+                    (x2, y2),
+                    (0, 255, 0),
+                    3
+                )
 
-        if best_circle is not None:
+                # Label
+                label = f"CRICKET BALL {confidence:.2f}"
 
-            x, y, radius = best_circle
+                cv2.putText(
+                    image,
+                    label,
+                    (x1, max(y1 - 10, 30)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 255, 0),
+                    2
+                )
 
-            self.ball_detected = True
-            self.ball_x = x
-            self.ball_y = y
-            self.ball_radius = radius
+                # Center point
+                center_x = int((x1 + x2) / 2)
+                center_y = int((y1 + y2) / 2)
 
-            cv2.circle(
-                image,
-                (x, y),
-                radius,
-                (0, 255, 0),
-                3
-            )
-
-            cv2.circle(
-                image,
-                (x, y),
-                4,
-                (0, 0, 255),
-                -1
-            )
-
-            cv2.putText(
-                image,
-                "BALL?",
-                (x + 15, y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 0),
-                2
-            )
-
-        else:
-
-            self.ball_detected = False
+                cv2.circle(
+                    image,
+                    (center_x, center_y),
+                    5,
+                    (0, 0, 255),
+                    -1
+                )
 
         return av.VideoFrame.from_ndarray(
             image,
@@ -171,25 +105,18 @@ class CricketVideoProcessor(VideoProcessorBase):
 
 
 # ==========================================
-# TITLE
+# UI
 # ==========================================
 
 st.title("🏏 Cricket FairPlay")
 
 st.subheader(
-    "V2 - Live Mobile Camera"
+    "V3 — AI Green Ball Detection"
 )
 
 st.write(
-    "Live camera for future cricket-ball tracking."
+    "Point your mobile camera at the green tennis ball."
 )
-
-
-# ==========================================
-# STATUS
-# ==========================================
-
-status_placeholder = st.empty()
 
 
 # ==========================================
@@ -197,25 +124,26 @@ status_placeholder = st.empty()
 # ==========================================
 
 webrtc_ctx = webrtc_streamer(
-    key="cricket-camera",
+    key="cricket-fairplay-camera",
+
     video_processor_factory=CricketVideoProcessor,
+
     media_stream_constraints={
         "video": {
             "facingMode": "environment"
         },
         "audio": False
     },
+
     async_processing=True
 )
 
 
 # ==========================================
-# INFORMATION
+# STATUS
 # ==========================================
 
 st.divider()
-
-st.subheader("📊 Camera Status")
 
 if webrtc_ctx.state.playing:
 
@@ -226,13 +154,10 @@ if webrtc_ctx.state.playing:
 else:
 
     st.info(
-        "📱 Press START to activate the camera"
+        "📱 Press START to start the camera"
     )
 
 
-st.warning(
-    "V2 uses a temporary detector. "
-    "It may detect other bright objects. "
-    "The proper cricket-ball AI detector "
-    "will be added in V3."
+st.caption(
+    "AI model: Cricket FairPlay Green Tennis Ball"
 )

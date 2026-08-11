@@ -1,29 +1,62 @@
 import streamlit as st
 import cv2
 import numpy as np
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
+import av
 
 
-# -----------------------------
-# Ball Tracker
-# -----------------------------
+# ==========================================
+# PAGE CONFIGURATION
+# ==========================================
 
-class BallTracker:
+st.set_page_config(
+    page_title="Cricket FairPlay",
+    page_icon="🏏",
+    layout="wide"
+)
+
+
+# ==========================================
+# VIDEO PROCESSOR
+# ==========================================
+
+class CricketVideoProcessor(VideoProcessorBase):
 
     def __init__(self):
-        self.previous_center = None
         self.ball_detected = False
-        self.frames_without_ball = 0
+        self.ball_x = 0
+        self.ball_y = 0
+        self.ball_radius = 0
 
-    def detect_ball(self, frame):
+    def recv(self, frame):
 
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        image = frame.to_ndarray(format="bgr24")
+
+        # ----------------------------------
+        # TEMPORARY BALL DETECTION
+        # ----------------------------------
+        # This is NOT the final AI detector.
+        # We will replace this with a trained
+        # cricket-ball model in V3.
+
+        hsv = cv2.cvtColor(
+            image,
+            cv2.COLOR_BGR2HSV
+        )
 
         lower = np.array([0, 0, 120])
         upper = np.array([180, 100, 255])
 
-        mask = cv2.inRange(hsv, lower, upper)
+        mask = cv2.inRange(
+            hsv,
+            lower,
+            upper
+        )
 
-        kernel = np.ones((5, 5), np.uint8)
+        kernel = np.ones(
+            (5, 5),
+            np.uint8
+        )
 
         mask = cv2.morphologyEx(
             mask,
@@ -88,150 +121,38 @@ class BallTracker:
                     int(radius)
                 )
 
-        return best_circle
+        # ----------------------------------
+        # DRAW DETECTION
+        # ----------------------------------
 
-    def update(self, frame):
+        if best_circle is not None:
 
-        ball = self.detect_ball(frame)
-
-        if ball is not None:
-
-            x, y, radius = ball
-
-            self.previous_center = (x, y)
+            x, y, radius = best_circle
 
             self.ball_detected = True
-
-            self.frames_without_ball = 0
-
-            return ball
-
-        self.frames_without_ball += 1
-
-        if self.frames_without_ball > 10:
-
-            self.ball_detected = False
-
-        return None
-
-
-# -----------------------------
-# Streamlit App
-# -----------------------------
-
-st.set_page_config(
-    page_title="Cricket FairPlay",
-    page_icon="🏏",
-    layout="wide"
-)
-
-st.title("🏏 Cricket FairPlay")
-
-st.caption(
-    "Cricket ball tracking - V1"
-)
-
-
-# -----------------------------
-# Session State
-# -----------------------------
-
-if "ball_count" not in st.session_state:
-    st.session_state.ball_count = 0
-
-if "last_ball" not in st.session_state:
-    st.session_state.last_ball = "Waiting..."
-
-if "tracker" not in st.session_state:
-    st.session_state.tracker = BallTracker()
-
-
-# -----------------------------
-# Reset
-# -----------------------------
-
-if st.button("🔄 Reset"):
-
-    st.session_state.ball_count = 0
-
-    st.session_state.last_ball = "Waiting..."
-
-    st.session_state.tracker = BallTracker()
-
-    st.rerun()
-
-
-# -----------------------------
-# Camera
-# -----------------------------
-
-camera = st.camera_input(
-    "📱 Take a picture using your mobile camera"
-)
-
-
-# -----------------------------
-# Match Information
-# -----------------------------
-
-col1, col2 = st.columns(2)
-
-with col1:
-
-    st.metric(
-        "Balls",
-        st.session_state.ball_count
-    )
-
-with col2:
-
-    st.metric(
-        "Status",
-        st.session_state.last_ball
-    )
-
-
-# -----------------------------
-# Process Image
-# -----------------------------
-
-if camera is not None:
-
-    bytes_data = camera.getvalue()
-
-    image = np.asarray(
-        bytearray(bytes_data),
-        dtype=np.uint8
-    )
-
-    frame = cv2.imdecode(
-        image,
-        cv2.IMREAD_COLOR
-    )
-
-    if frame is not None:
-
-        ball = st.session_state.tracker.update(
-            frame
-        )
-
-        display_frame = frame.copy()
-
-        if ball is not None:
-
-            x, y, radius = ball
+            self.ball_x = x
+            self.ball_y = y
+            self.ball_radius = radius
 
             cv2.circle(
-                display_frame,
+                image,
                 (x, y),
                 radius,
                 (0, 255, 0),
                 3
             )
 
+            cv2.circle(
+                image,
+                (x, y),
+                4,
+                (0, 0, 255),
+                -1
+            )
+
             cv2.putText(
-                display_frame,
-                "BALL",
+                image,
+                "BALL?",
                 (x + 15, y),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,
@@ -239,32 +160,79 @@ if camera is not None:
                 2
             )
 
-            st.session_state.last_ball = (
-                "🟢 Ball detected"
-            )
-
         else:
 
-            st.session_state.last_ball = (
-                "⚪ Ball not detected"
-            )
+            self.ball_detected = False
 
-        display_frame = cv2.cvtColor(
-            display_frame,
-            cv2.COLOR_BGR2RGB
+        return av.VideoFrame.from_ndarray(
+            image,
+            format="bgr24"
         )
 
-        st.image(
-            display_frame,
-            caption="Ball Detection",
-            use_container_width=True
-        )
 
+# ==========================================
+# TITLE
+# ==========================================
+
+st.title("🏏 Cricket FairPlay")
+
+st.subheader(
+    "V2 - Live Mobile Camera"
+)
+
+st.write(
+    "Live camera for future cricket-ball tracking."
+)
+
+
+# ==========================================
+# STATUS
+# ==========================================
+
+status_placeholder = st.empty()
+
+
+# ==========================================
+# LIVE CAMERA
+# ==========================================
+
+webrtc_ctx = webrtc_streamer(
+    key="cricket-camera",
+    video_processor_factory=CricketVideoProcessor,
+    media_stream_constraints={
+        "video": {
+            "facingMode": "environment"
+        },
+        "audio": False
+    },
+    async_processing=True
+)
+
+
+# ==========================================
+# INFORMATION
+# ==========================================
 
 st.divider()
 
-st.info(
-    "V1: Basic cricket ball detection. "
-    "Wide, No Ball and Wicket detection "
-    "will be added next."
+st.subheader("📊 Camera Status")
+
+if webrtc_ctx.state.playing:
+
+    st.success(
+        "🟢 Live camera is running"
+    )
+
+else:
+
+    st.info(
+        "📱 Press START to activate the camera"
+    )
+
+
+st.warning(
+    "V2 uses a temporary detector. "
+    "It may detect other bright objects. "
+    "The proper cricket-ball AI detector "
+    "will be added in V3."
 )

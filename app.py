@@ -3,6 +3,9 @@ from ultralytics import YOLO
 from PIL import Image
 import numpy as np
 from pathlib import Path
+import threading
+import av
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 
 
 # ---------------------------------------------------------
@@ -110,17 +113,50 @@ image = None
 
 
 # ---------------------------------------------------------
-# CAMERA INPUT
+# LIVE CAMERA INPUT
 # ---------------------------------------------------------
 
 if input_method == "📷 Camera":
 
-    camera_image = st.camera_input(
-        "Take a photo of the cricket ball"
-    )
+    st.info("🎥 Start the camera below. YOLO will detect the ball live.")
 
-    if camera_image is not None:
-        image = Image.open(camera_image).convert("RGB")
+    # Prevent overlapping YOLO inference calls from the video callback.
+    inference_lock = threading.Lock()
+
+    def video_frame_callback(frame):
+        img = frame.to_ndarray(format="bgr24")
+
+        # Do not allow concurrent model.predict calls.
+        with inference_lock:
+            results = model.predict(
+                source=img,
+                conf=confidence,
+                verbose=False
+            )
+
+        # result.plot() returns a BGR NumPy image.
+        annotated = results[0].plot()
+
+        return av.VideoFrame.from_ndarray(
+            annotated,
+            format="bgr24"
+        )
+
+    webrtc_streamer(
+        key="cricket-ball-live-detection",
+        mode=WebRtcMode.SENDRECV,
+        rtc_configuration=RTCConfiguration({
+            "iceServers": [
+                {"urls": ["stun:stun.l.google.com:19302"]}
+            ]
+        }),
+        video_frame_callback=video_frame_callback,
+        media_stream_constraints={
+            "video": True,
+            "audio": False
+        },
+        async_processing=True
+    )
 
 
 # ---------------------------------------------------------
@@ -142,7 +178,7 @@ else:
 # DETECTION
 # ---------------------------------------------------------
 
-if image is not None:
+if image is not None and input_method == "📁 Upload Image":
 
     st.divider()
 
@@ -271,10 +307,10 @@ if image is not None:
 # INSTRUCTIONS
 # ---------------------------------------------------------
 
-else:
+elif input_method == "📁 Upload Image":
 
     st.info(
-        "📷 Take a photo or 📁 upload an image to start detection."
+        "📁 Upload an image to start detection."
     )
 
     st.markdown(
